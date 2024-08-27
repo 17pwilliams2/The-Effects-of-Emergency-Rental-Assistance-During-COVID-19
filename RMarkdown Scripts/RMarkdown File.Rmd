@@ -1,0 +1,114 @@
+---
+title: "Analyzing the Timing of Emergency Rental Assistance Programs During the COVID-19
+  Pandemic"
+author: "Peter Williams"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+rm(list = ls())
+```
+
+```{r import_packages, include=FALSE}
+if(!require("pacman"))
+install.packages("pacman")
+library(pacman, quietly = TRUE)
+p_load(haven, readxl, dplyr, lubridate, ggplot2, ggthemes, reshape2, ggpubr, stringr)
+```
+
+```{r filepaths, include=FALSE}
+# Change this line below with the relevant directory to replicate #
+setwd("/Users/peterwilliams/Desktop/The Effects of Emergency Rental Assistance During the Pandemic Figure Data")
+```
+
+# About This Document
+
+This document serves as the replication code for the figures which analyze the timing of the Chicago DOH, Chicago DRP, LA, King County, Harris County, and Treasury ERA COVID-19 emergency rental assistance programs in the context of disposable income, unemployment, rental arrears, and risk of eviction in 'The Effects of Emergency Rental Assistance During the Pandemic: Evidence from Four Cities'.
+
+We present four separate figures, each of which I detail in its own section below.
+
+# 1. Disposable Income (Bottom 50% of Households)
+
+Our first figure analyzes the disposable income level of the bottom 50% of households during the COVID-19 pandemic. This data comes <https://realtimeinequality.org/>.
+
+## STATA: Producing the data
+
+At <https://github.com/thomasblanchet/real-time-inequality>, the creators of the website <https://realtimeinequality.org/> and authors of the corresponding paper 'Real-Time Inequality' provide the STATA code and public data that they use on their website and in their paper. I use seven STATA programs, replacing and creating directories in the code as necessary, located in the 'programs' folder to reconstruct their time series on the disposable income of the bottom 50% of households.
+
+(a) **01-import-nipa.do** - This is the first program I run. This imports the National Income and Product Accounts (NIPA) deflator that standardizes the income data.
+
+(b) **01-import-aid-covid.do** - This is the second program I run. This imports COVID-19 economic stimulus data. In order to run this code, you must download the 'covid-aid-data.xlsx' file from the 'raw-data/covid-aid-data' folder.
+
+(c) **01-import-dina.do** - This is the third program I run. This imports the monthly microfiles that they use to construct their data. In order to run this code, you must download the microfiles located at <https://www.dropbox.com/scl/fi/2xg6klquck33meyt6go67/PSZ2022Dinafiles.zip?rlkey=0ywtis6bgjetw43xhx46f78hn&e=1&dl=0> (this link comes from <https://gabriel-zucman.eu/usdina/> through the "Distributional national accounts micro-files" link) and replace the file path on line 6 with the location of the downloaded files. I also had to remove the 'top400' variable from the 'keep' command due to a 'missing variable' error.
+
+(d) **01-import-ici.do** - This is the fourth program I run. This imports data from the Investment Company Institute (ICI).
+
+(e) **02-prepare-nipa.do** - This is the fifth program I run. This prepares the raw NIPA data. In order to compensate for errors while running the code, I removed line 537 ('replace to_keep = 1 if series_code == "y672rc"'), line 595 ('local disag_y672rc "b040rc"'), and all other occurrences of 'y672rc' in the code that were not commented out. I also replaced all occurrences of the 'renvars' command with the 'rename' command, accounting for subsequent differences in syntax. Further, for the 'generate nipa_princ' command on line 757, I added a conditional function that replaced missing values with 0. For example, '+ nipa_proprietors' became '+ cond(missing(nipa_proprietors), 0, nipa_proprietors)'. Finally, I removed line 775 ('assert reldif(nipa_princ, a032rc) \< 1e-4 if yq(year, quarter) \< yq(2022, 01)') as every entry of the a032rc variable was missing and thus generating an error at this line.
+
+(f) **03-decompose-components.do** - This is the sixth program I run. This decomposes total income into its components. In order to run this code, you must remove the comment characters from lines 53 and 54 so that STATA runs the for loops for each list; to save time, you can also remove the 'adult' variable from line 54 as we are only concerned with the working-age data. You also must download all of the monthly microfiles located at <https://www.dropbox.com/scl/fo/lacu5k5ndquxgo72nclyv/AOorwugG1jiiDcs5LuZFoeA?rlkey=b1y05p8no5s84drtof4q32bzn&e=1&dl=0> and replace the file path on line 64 with the location of the downloaded files. To save time, I only downloaded the monthly microfiles for 01/2019 - 03/2023, and I adjusted the data ranges at the top of the code to reflect this new range.
+
+## R: Graphing the data
+
+Once Stata has finished running, the data is ready to be read into RStudio. I run the following code to read the data into RStudio, combine it into a single data frame, subset only the bottom 50% of households, compute monthly averages, standardize it with the NIPA deflator produced through Stata, and store factor income and post-tax disposable income.
+
+```{r}
+# My methods for this section comes from the 04-plot-covid.do program in the realtimeinequality.org methodology.
+
+# Read working age population income data produced by Stata files #
+Princ_Working_Age_Data <- read_dta("decomposition-monthly-princ-working_age.dta")
+Peinc_Working_Age_Data <- read_dta("decomposition-monthly-peinc-working_age.dta")
+Dispo_Working_Age_Data <- read_dta("decomposition-monthly-dispo-working_age.dta")
+Poinc_Working_Age_Data <- read_dta("decomposition-monthly-poinc-working_age.dta")
+
+# Bind columns to create a single data frame, removing unnecessary and redundant columns #
+Working_Age_Data <- bind_cols(Princ_Working_Age_Data[,c(1:4)], Poinc_Working_Age_Data[,-c(1:3,5)], Peinc_Working_Age_Data[,-c(1:3,5)], Dispo_Working_Age_Data[,-c(1:3,5)])
+
+# Read in nipa deflator and add to working age data #
+Nipa_Deflator <- read_dta("nipa-simplified-monthly.dta")
+Working_Age_Data$'Nipa Deflator' <- 0
+for (i in 1:nrow(Working_Age_Data)) {
+  Working_Age_Data$`Nipa Deflator`[i] <- Nipa_Deflator$nipa_deflator[Nipa_Deflator$year == Working_Age_Data$year[i] & Nipa_Deflator$month == Working_Age_Data$month[i]]
+}
+
+# Keep only bottom 50% of households #
+Working_Age_Data <- Working_Age_Data[Working_Age_Data$p <= 49000,]
+Working_Age_Data <- Working_Age_Data[,-3]
+
+# Make a dataframe of averages #
+Income_Timeseries <- data.frame(matrix(nrow = 51, ncol = ncol(Working_Age_Data)))
+colnames(Income_Timeseries) <- colnames(Working_Age_Data)
+Income_Timeseries$year <- c(rep(2019,12), rep(2020,12), rep(2021,12), rep(2022,12), rep(2023,3))
+Income_Timeseries$month <- c(rep(c(1:12),4),c(1:3))
+for (i in 1:nrow(Income_Timeseries)) {
+  for (j in 3:ncol(Income_Timeseries)) {
+    Income_Timeseries[i,j] <- colMeans(Working_Age_Data[Working_Age_Data$year == Income_Timeseries$year[i] & Working_Age_Data$month == Income_Timeseries$month[i],j])
+  }
+}
+
+# De-annualize and divide by the NIPA deflator #
+for (i in 1:nrow(Income_Timeseries)) {
+  for (j in 3:(ncol(Income_Timeseries) - 1)) {
+    Income_Timeseries[i,j] <- Income_Timeseries[i,j] / 12 / Income_Timeseries$`Nipa Deflator`[i]
+  }
+}
+
+# Create columns for graph #
+Income_Timeseries$'Factor Income' <- Income_Timeseries$princ
+Income_Timeseries$'Subsidized Factor Income' <- Income_Timeseries$princ + Income_Timeseries$covidsub
+Income_Timeseries$'Subsidized Pretax National Income' <- Income_Timeseries$`Subsidized Factor Income` + Income_Timeseries$uiben + Income_Timeseries$penben - Income_Timeseries$contrib
+Income_Timeseries$'Post-Tax Disposable Income' <- Income_Timeseries$`Subsidized Pretax National Income` + Income_Timeseries$vet + Income_Timeseries$othcash - Income_Timeseries$taxes - Income_Timeseries$estatetax - Income_Timeseries$corptax - Income_Timeseries$othercontrib + Income_Timeseries$covidrelief
+Income_Timeseries$'Date' <- seq(as.Date("2019-02-01"), as.Date("2023-04-01"), by = "1 month") - 1
+Income_Timeseries <- Income_Timeseries[,c(27:31)]
+
+# Melt the graph for legend purposes #
+Income_Timeseries$Date <- as.character(Income_Timeseries$Date)
+Income_Timeseries_Melted <- melt(Income_Timeseries)
+Income_Timeseries_Melted$Date <- seq(as.Date("2019-02-01"), as.Date("2023-04-01"), by = "1 month") - 1
+colnames(Income_Timeseries_Melted) <- c("Date", "Type of Income", "Monthly Income per adult (constant USD)")
+
+# Remove extra variables for line graphs #
+Income_Timeseries_Melted_Factor_and_Disposable <- Income_Timeseries_Melted[Income_Timeseries_Melted$`Type of Income` %in% c("Factor Income", "Post-Tax Disposable Income"),]
+
+```
